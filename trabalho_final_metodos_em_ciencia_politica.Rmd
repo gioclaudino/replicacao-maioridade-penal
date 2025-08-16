@@ -1,0 +1,468 @@
+---
+title: "Trabalho Final da disciplina FLP0468 - Métodos Quantitativos de Pesquisa na Ciência Política IV (2024)"
+author: "Giovanna Claudino de Almeida Silva"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r pacotes, include=FALSE}
+library(sjlabelled)
+library(here)
+library(tidyverse)
+library(knitr)
+library(janitor)
+library(data.table)
+library(psych)
+library(ggplot2)
+library(rmarkdown)
+library(tinytex)
+library(stats)
+library(lmtest)
+library(car)
+
+```
+
+# Replicação do artigo "A redução da maioridade penal diminui a violência? Evidências de um estudo comparado"
+
+O artigo *"A redução da maioridade penal diminui a violência? Evidências de um estudo comparado"*, publicado em 2016 por Rodrigo Lins, Dalson Figueiredo Filho e Lucas Silva, investiga a hipótese de que a redução da maioridade penal contribui para a diminuição da violência. O estudo adota um desenho metodológico que combina análise espacial, estatística descritiva e modelos de regressão linear, a partir de dados coletados de 197 países. Com foco em duas variáveis principais — maioridade penal, coletada por Hazel (2008) e por Grand Valley (2012), e idade de responsabilidade criminal, coletada por Hazel (2008) e Cipriani (2009) — a pesquisa busca compreender as relações entre os limites legais de imputabilidade e os indicadores de violência, representados pela taxa de homicídios. Os resultados sugerem que os países com maioridade penal mais alta tendem a apresentar níveis menores de violência. Os coeficientes das regressões apontam para uma relação inversa entre essas variáveis, indicando que a redução da maioridade penal pode estar associada a um aumento na taxa de homicidios.
+
+# Avaliação inicial da base de dados
+
+Há muitos dados faltantes nas variáveis analisadas, principalmente em: gini, desemprego, responsabilidade criminal da Hazel e maioridade penal da Hazel. Esse desencontro de informações é problemático, pois pode gerar vieses no modelo. Por exemplo, a regressão da Hazel aparenta estar mais concentrada em países com IDHs médios a altos — e, se realmente estiver enviesada, é provavelmente porque ela conseguiu poucos dados de países africanos, como é mencionado no artigo. Para garantir a validade do modelo, é necessário que a amostra tenha um tamanho mínimo, de forma a capturar toda a variabilidade dos dados. Quanto maior o número de observações (N), menor a probabilidade de viés, como explica a Lei dos Grandes Números. Essa limitação na amostra representa um erro crucial, que inviabiliza extrapolações do modelo para previsões ou inferências causais.
+
+É importante mencionar que foram utilizadas várias medidas de maioridade penal e responsabilidade criminal. Embora algumas dessas medidas apresentem menos dados faltantes, nenhuma possui uma base de dados suficientemente grande, o que seria o ideal. Segundo Peduzzi et al. (1996), o tamanho ideal de uma base de dados deve ser de 10 eventos (ou observações) por variável. Os autores demonstraram que, com menos de 10 eventos por variável, os coeficientes de regressão tendem a ser enviesados, as estimativas variam de forma excessiva, e os limites de confiança não têm cobertura adequada. No nosso caso, considerando quatro variáveis por regressão, o número ideal de observações seria 40. Embora a base de dados original possua 197 observações, a quantidade real será menor devido aos valores ausentes (NAs). Para determinar a quantidade exata de observações por regressão, verificaremos a quantidade de resíduos mais adiante. Caso o número de resíduos seja inferior a 40, a base de dados não terá o tamanho ideal.
+
+Além disso, as demais variáveis também apresentam tamanhos variáveis, dependendo da quantidade de dados faltantes nas variáveis de maioridade penal e responsabilidade criminal. Isso ocorre porque, ao haver um NA em qualquer uma dessas variáveis, toda a linha é descartada, eliminando também observações válidas de outras variáveis. Fiz testes utilizando as duas variáveis da taxa de homicídios, e as duas variáveis de índice de Gini. Apesar da recomendação, troquei a variável ginet_solt pela variável ginmar_solt, já que com essa segunda variável eu obtive valores iguais as regressões apresentadas no artigo — e o intuito desse trabalho é replicar o artigo e avaliar sua qualidade.
+
+```{r}
+url <- "https://raw.githubusercontent.com/gioclaudino/replicacao-maioridade-penal/main/maioridade.tab"
+
+data_lins16 <- fread(url) %>%
+  clean_names() %>%
+  mutate(acr_cipriani = ifelse(acr_cipriani == 999, NA, acr_cipriani))
+
+data_lins16$idh[155] <- 0.313
+
+#Redução da base de dados para as variáveis de interesse
+
+data_lins16 <- data_lins16 %>%
+  select(
+    -homi_number,
+    -homi_number_unodc,
+    -homi_rate,
+    -ginet_solt,
+    -cname) %>% 
+  rename(
+    gini = ginmar_solt,
+    taxa_homicidios = homi_rate_unodc,
+    desemprego = desemprego_longo,
+    rcrim_hz = acr_hazel,
+    rcrim_cp = acr_cipriani,
+    mpenal_hz = acm_hazel,
+    mpenal_gv = acm_gv
+    )
+
+#Problemas com os dados: quantidade de NAs
+#Há muitos dados faltantes, principalmente nas variáveis: gini, desemprego, rcrim_hz, mpenal_hz
+#Contando a quantidade de NAs
+
+na_por_coluna <- sapply(data_lins16, function(x) sum(is.na(x)))
+na_por_coluna
+```
+
+```{r regressões}
+reg_mpenal_hz <- lm (taxa_homicidios ~ mpenal_hz + idh + gini + desemprego, data = data_lins16)
+reg_mpenal_gv <- lm (taxa_homicidios ~ mpenal_gv + idh + gini + desemprego, data = data_lins16)
+reg_rcrim_hz <- lm (taxa_homicidios ~ rcrim_hz + idh + gini + desemprego, data = data_lins16)
+reg_rcrim_cp <- lm (taxa_homicidios ~ rcrim_cp + idh + gini + desemprego, data = data_lins16)
+```
+
+# Os critérios de avaliação da regressão múltipla
+
+## Avaliação do modelo através do summary
+
+Quando utilizamos a função summary em uma regressão múltipla gerada com lm, recebemos um resumo das principais informações daquela regressão. Primeiramente, aparece um resumo dos resíduos, que são os valores mínimo, 1º quartil, mediana, 3º quartil e máximo da distribuição desses resíduos. Essas informações ajudam a identificar possíveis assimetrias ou outliers nos resíduos, que podem afetar a validade do modelo — resíduos bem distribuídos indicam que o modelo se ajusta adequadamente aos dados.
+
+O segundo item é referente à regressão em si, com os coeficientes estimados para o intercepto e para cada variável independente. Esses coeficientes indicam o efeito médio de uma unidade de aumento na variável explicativa sobre a variável dependente, mantendo as demais constantes. Para cada coeficiente, são fornecidos o erro-padrão, que mede a precisão da estimativa, o valor t, que testa se o coeficiente é significativamente diferente de zero, e o p-valor, que indica a significância estatística desse teste — valores baixos de p (geralmente abaixo de 0,05) sugerem que o coeficiente é relevante para o modelo.
+
+Depois, temos o R² e o R² ajustado. No caso desse trabalho, o R² ajustado é mais relevante, pois ele é o indicado para regressões múltiplas, já que ele ajusta o R² básico (que mede a proporção da variância explicada pelo modelo) para o número de variáveis incluídas. Um R² ajustado alto sugere que o modelo explica bem a variabilidade da variável dependente, considerando o número de preditores. Em regressões múltiplas, ele é um dos principais indicadores da qualidade do modelo.
+
+### Intervalo de confiança
+
+O intervalo de confiança é uma faixa de valores que estima a incerteza sobre um parâmetro, como dos coeficientes da regressão. Ele indica o intervalo dentro do qual esperamos que o valor real do parâmetro se encontre com uma determinada confiança (por exemplo, 95%). O intervalo de confiança pode ser calculado no R com o código confint(modelo, level = 0.95), onde "modelo" seria a regressão gerada na função lm. Esse código retorna os limites inferior e superior para os coeficientes do modelo, com base no nível de confiança especificado.
+
+## Checagem dos pressupostos
+
+### Homoscedasticidade
+
+A homoscedasticidade é uma condição em regressões lineares em que os resíduos, ou diferenças entre os valores observados e estimados, apresentam variância constante em todos os níveis da variável explicativa. Essa característica é fundamental para garantir a precisão dos erros padrão e a validade das inferências estatísticas. A violação desse pressuposto, conhecida como heteroscedasticidade, pode comprometer a confiabilidade das estimativas, subestimando ou superestimando a variabilidade dos erros em diferentes partes do conjunto de dados. Isso pode indicar que variáveis relevantes estão ausentes do modelo ou que o modelo não está capturando adequadamente a relação entre as variáveis.
+
+A verificação da homoscedasticidade será feita por meio de um teste e um gráfico. Primeiro, o gráfico Scale-Location avalia a distribuição da raiz quadrada dos resíduos padronizados em relação aos valores previstos. O ideal é que os pontos estejam distribuídos de forma aleatória e constante, com uma linha vermelha horizontal — a presença de qualquer padrão na distribuição dos resíduos representa uma violação do pressuposto. Segundo, o teste Breusch-Pagan (função bptest() do pacote lmtest em R) é um teste de hipóteses que avalia a homoscedasticidade. A hipótese nula assume homoscedasticidade, em um nível de significância de 0,05, enquanto valores menores indicam heteroscedasticidade. Lembrando que, esse pressuposto não pode ser avaliado diretamente, pois não temos o valor real do erro, e usamos os resíduos para fazer uma aproximação. Para utilizar o teste Breusch-Pagan, é importante que a regressão não tenha violado o pressuposto da normalidade.
+
+### Normalidade
+
+A normalidade dos resíduos é um pressuposto importante da regressão linear que assume que os resíduos possuem uma distribuição normal com média 0. Esse pressuposto é essencial para a validade de testes estatísticos e intervalos de confiança. A violação da normalidade pode indicar problemas no modelo ou nas variáveis utilizadas, comprometendo a precisão das inferências.
+
+Para verificar a normalidade, utiliza-se o gráfico Q-Q plot e o teste Shapiro-Wilk. O Q-Q plot compara os quantis dos resíduos observados com os quantis teóricos de uma distribuição normal; se os pontos seguem a linha diagonal, a normalidade é satisfeita. O teste Shapiro-Wilk testa a hipótese nula de que os resíduos seguem distribuição normal. Um p-valor maior que 0,05 sugere que a normalidade não foi violada. Se houver desvios significativos no gráfico ou um p-valor pequeno, é recomendável revisar o modelo ou considerar transformações das variáveis.
+
+### Linearidade
+
+A linearidade entre a variável dependente e as independentes é o fundamento de um modelo de regressão linear. Esse pressuposto garante que o modelo captura adequadamente a relação entre as variáveis. Se a relação for não linear, o uso de um modelo linear não é apropriado.
+
+A linearidade é avaliada com o gráfico "Residuals vs Fitted" e a função pair.panels(). No primeiro, os resíduos devem se distribuir aleatoriamente em torno da linha horizontal. Já no pair.panels, analisa-se a relação de cada variável independente com a dependente; uma linha reta vermelha sugere linearidade. Caso a linearidade seja violada, como evidenciado por padrões nos gráficos, é necessário ajustar o modelo com transformações ou considerar alternativas como modelos não lineares.
+
+### Multicolinearidade
+
+A multicolinearidade ocorre quando variáveis independentes estão altamente correlacionadas, dificultando a estimativa dos efeitos individuais no modelo. Isso compromete a interpretação dos coeficientes e aumenta a variância das estimativas. Para verificar, utiliza-se a função pair.panels() para calcular os coeficientes de correlação de Pearson entre pares de variáveis; valores absolutos acima de 0,8 indicam alta correlação. Além disso, o fator de inflação da variância (VIF), calculado com a função vif, deve ser inferior a 10 para indicar ausência de multicolinearidade.
+
+### Esperança dos Resíduos Igual a 0
+
+A esperança dos resíduos deve ser, em média, igual a 0, refletindo que a soma dos erros é balanceada em torno do valor estimado. Isso garante que o modelo está ajustado corretamente. Embora a média dos resíduos sempre seja 0 devido ao método dos mínimos quadrados, problemas podem ser identificados analisando o histograma ou gráfico de densidade dos resíduos. Os resíduos devem ser distribuídos de forma aleatória, com maior densidade em torno de 0. Uma distribuição enviesada pode indicar falhas no modelo ou variáveis ausentes.
+
+### Independência dos Resíduos
+
+A independência dos resíduos implica que os erros não estão correlacionados, sendo particularmente importante em dados temporais ou espaciais. Violar esse pressuposto pode comprometer a validade do modelo. Para verificar, utiliza-se o gráfico de dispersão dos resíduos contra um identificador (id) e o teste de Durbin-Watson (para esse teste, é importante que a regressão não tenha violado o pressuposto da normalidade). No gráfico, os resíduos devem ser distribuídos de forma aleatória. No teste Durbin-Watson, valores próximos de 2 indicam independência (intervalo ideal: 1 a 3). Um p-valor maior que 0,05 no teste sugere que a autocorrelação não é significativa.
+
+### Outliers
+
+Outliers são valores extremos que podem influenciar negativamente o ajuste do modelo, atuando como pontos de alavancagem. Embora nem sempre comprometam a validade do modelo, podem distorcer a reta de regressão. Para detectá-los, utiliza-se o gráfico "Residuals vs Leverage" e a função rstandard para medir resíduos padronizados. Valores acima de 3 ou abaixo de -3 são considerados outliers. A exclusão de outliers deve ser feita com cautela, avaliando sua influência no modelo e justificando cientificamente sua remoção.
+
+```{r pair.panels}
+#PAINEL QUE APRESENTA A MULTICOLINEARIDADE E A LINEARIDADE DE TODAS AS VARIÁVEIS ENTRE SI NO data_lins16
+
+pairs.panels(data_lins16, lm=TRUE)
+```
+
+# Avaliação da regressão de maioridade penal da Hazel
+
+-   Análise dos Coeficientes: Os únicos coeficientes que demonstraram relevância estatística foram o intercepto e o IDH. A variável de interesse do artigo, mpenal_hz, tem relação negativa com a taxa de homicídios — quando a taxa aumenta em uma unidade, a maioridade penal diminui em 0,364. O modelo consegue explicar 25% da variabilidade da variável dependente. Essa regressão teve 29 resíduos, ou seja, 29 observações.
+
+-   Testando os Pressupostos
+
+    -   Multicolinearidade: A análise da correlação de Pearson mostrou que as variáveis independentes não apresentam correlações altas. O VIF não indicou problemas de multicolinearidade, com valores bem abaixo de 10.
+
+    -   Intervalo de Confiança: O intervalo de confiança das variáveis IDH e do intercepto é grande, indicando incerteza nas estimativas. O coeficiente de desemprego apresentou o menor intervalo, ou seja, é o mais preciso.
+
+    -   Linearidade: A variável Gini, IDH e a de maioridade penal apresentaram uma pequena relação linear (apesar de que a reta do IDH está sendo influenciada por um ponto isolado, que faz a relação parecer mais linear). No entanto, o gráfico "Residuals vs Fitted" sugere violação do pressuposto de linearidade, pois a linha vermelha não segue a linha pontilhada.
+
+    -   Normalidade dos Resíduos: O teste de Shapiro-Wilk (p=0,0116) rejeitou a hipótese de normalidade. O gráfico Q-Q também confirmou que a distribuição dos resíduos se aproximou da distribuição normal só no meio da reta, variando muito nas extremidades. Logo, além de violar o pressuposto, também invalida os resultados dos testes de homoscedasticidade e de independência — logo, a análise deve ser centralizada nos gráficos.
+
+    -   Homoscedasticidade: O gráfico Scale-location indicou a violação deste pressuposto, pois a linha vermelha não foi horizontal e os pontos não estavam distribuídos aleatoriamente. O teste de Breusch-Pagan, apesar de ser inválido nesse contexto, também rejeitaria a hipótese nula de que há homoscedasticidade — ou seja, o pressuposto foi violado.
+
+    -   Outliers: No gráfico "Residuals vs Leverage", dois pontos (102 e 182) estavam próximos dos limites de outliers, mas o summary dos resíduos padronizados (rstandard) mostrou que nem o máximo nem o mínimo ultrapassaram os valores 3 e -3, ou seja, não há violação desse pressuposto.
+
+    -   Independência dos Resíduos: A análise dos resíduos visualmente não indicou violação da independência dos resíduos. O gráfico mostrou distribuição aleatória, o que sugere que os resíduos são independentes entre si.
+
+    -   Esperança dos Resíduos = 0: O histograma e a média dos resíduos indicaram que a esperança é próxima de 0, o que não confirma o pressuposto, mas era o que se esperava acontecer.
+
+```{r reg_mpenal_hz}
+#TESTES PARA A REGRESSÃO DE MAIORIDADE PENAL DE HAZEL
+
+#Resumo da regressão
+summary(reg_mpenal_hz)
+
+#Medida de multicolinearidade
+vif(reg_mpenal_hz)
+
+#Intervalo de confiança dos coeficientes
+confint(reg_mpenal_hz, level = 0.95)
+
+#Gráfico que apresenta: linearidade, normalidade, homoscedasticidade, e outliers
+par(mfrow=(c(2,2)))
+plot(reg_mpenal_hz)
+
+#Teste de normalidade
+shapiro.test(residuals(reg_mpenal_hz))
+
+#Teste de homoscedasticidade
+bptest(reg_mpenal_hz)
+
+#Outliers
+summary(rstandard(reg_mpenal_hz))
+
+#Gráfico de independência
+residuos_mpenal_hz <- data.frame (
+  residuos = residuals(reg_mpenal_hz)) %>%
+  mutate(
+    id = row_number())
+
+residuos_mpenal_hz %>% 
+  ggplot(aes(x = id, y = residuos)) +
+  geom_point(
+    alpha = 0.3) +
+  geom_smooth(method = "lm", color = "red") +
+  theme_bw()
+
+#Teste de independencia
+durbinWatsonTest(reg_mpenal_hz)
+
+#Gráfico de densidade e média dos resíduos, pressuposto da esperança = 0
+residuos_mpenal_hz %>%
+   summarise( 
+    media = round(mean(residuos), 10))
+  
+residuos_mpenal_hz %>%
+  ggplot(aes(x= residuos)) +
+  geom_density()
+```
+
+# Avaliação da regressão de maioridade penal da Grand Valley State University
+
+-   Análise dos Coeficientes: Os únicos coeficientes que demonstraram relevância estatística foram o desemprego e o IDH — sendo que esse último demonstrou grande relevância. O IDH possui uma relação negativa com a taxa de homicídios, diminuindo em 28,973 a cada uma unidade da variável dependente. A variável de interesse do artigo, mpenal_gv, tem relação negativa com a taxa de homicídios — quando a taxa aumenta em uma unidade, a maioridade penal diminui em 0,224. O modelo consegue explicar 30% da variabilidade da variável dependente. Essa regressão teve 37 resíduos, ou seja, 37 observações.
+
+-   Testando os Pressupostos
+
+    -   Multicolinearidade: A análise da correlação de Pearson mostrou que as variáveis independentes não apresentam correlações altas. O VIF não indicou problemas de multicolinearidade, com valores bem abaixo de 10.
+
+    -   Intervalo de Confiança: O intervalo de confiança das variáveis IDH e do intercepto é grande, indicando incerteza nas estimativas. O coeficiente de desemprego continuou sendo o que apresentou o menor intervalo, ou seja, é o mais preciso.
+
+    -   Linearidade: As observações sobre o pairs.panels continuam iguais a da regressão anterior. O gráfico "Residuals vs Fitted" sugere violação do pressuposto de linearidade, pois a linha vermelha não segue a linha pontilhada.
+
+    -   Normalidade dos Resíduos: O teste de Shapiro-Wilk (p=0,0002) rejeitou a hipótese de normalidade. Porém, vemos no gráfico Q-Q que a distribuição dos resíduos se aproximou da distribuição normal, mas que há um ponto que está muito distante, provavelmente influenciando o teste. Logo, irei considerar que o pressuposto não foi violado, principalmente se confirmarmos que há um outlier muito influente (ponto 114).
+
+    -   Homoscedasticidade: O gráfico Scale-location indicou a violação deste pressuposto, pois a linha vermelha não foi horizontal e os pontos não estavam distribuídos aleatoriamente. O teste de Breusch-Pagan também rejeitou a hipótese nula de que há homoscedasticidade (p=0,006) — ou seja, o pressuposto foi violado.
+
+    -   Outliers: No gráfico "Residuals vs Leverage", dois pontos aparecem próximos dos limites de outliers, principalmente o ponto 114. O summary dos resíduos padronizados (rstandard) mostrou que o valor máximo dos resíduos foi 4,464, muito acima do valor ideal de 3. Nesse caso, além de haver uma violação do pressuposto, seria indicado investigar esse caso, para analisar se é plausível removê-lo — pois podemos afirmar que ele está agindo como um ponto de alavancagem.
+
+    -   Independência dos Resíduos: A análise dos resíduos visualmente e a partir do teste não indicou violação da independência dos resíduos. O gráfico mostrou distribuição aleatória, o que sugere que os resíduos são independentes entre si.
+
+    -   Esperança dos Resíduos = 0: O histograma e a média dos resíduos indicaram que a esperança é próxima de 0, o que não confirma o pressuposto, mas era o que se esperava acontecer.
+
+```{r reg_mpenal_gv}
+#TESTES PARA A REGRESSÃO DE MAIORIDADE PENAL DE GRAND VALLEY STATE UNIVERSITY
+
+#Resumo da regressão
+summary(reg_mpenal_gv)
+
+#Medida de multicolinearidade
+vif(reg_mpenal_gv)
+
+#Intervalo de confiança dos coeficientes
+confint(reg_mpenal_gv, level = 0.95)
+
+#Gráfico que apresenta: linearidade, normalidade, homoscedasticidade, e outliers
+par(mfrow=(c(2,2)))
+plot(reg_mpenal_gv)
+
+#Teste de normalidade
+shapiro.test(residuals(reg_mpenal_gv))
+
+#Teste de homoscedasticidade
+bptest(reg_mpenal_gv)
+
+#Outliers
+summary(rstandard(reg_mpenal_gv))
+
+#Gráfico de independência
+residuos_mpenal_gv <- data.frame (
+  residuos = residuals(reg_mpenal_gv)) %>%
+  mutate(
+    id = row_number())
+
+residuos_mpenal_gv %>% 
+  ggplot(aes(x = id, y = residuos)) +
+  geom_point(
+    alpha = 0.3) +
+  geom_smooth(method = "lm", color = "red") +
+  theme_bw()
+
+#Teste de independencia
+durbinWatsonTest(reg_mpenal_gv)
+
+#Gráfico de densidade e média dos resíduos, pressuposto da esperança = 0
+residuos_mpenal_gv %>%
+   summarise( 
+    media = round(mean(residuos), 10))
+
+residuos_mpenal_gv %>%
+  ggplot(aes(x= residuos)) +
+  geom_density()
+```
+
+# Avaliação da regressão de responsabilidade criminal da Hazel
+
+-   Análise dos Coeficientes: Os únicos coeficientes que demonstraram relevância estatística foram o intercepto, o IDH (alta relevância) e o desemprego. O IDH possui uma relação negativa com a taxa de homicídios, diminuindo em 28,574 a cada uma unidade da variável dependente. A variável de interesse do artigo, rcrim_hz, tem relação negativa com a taxa de homicídios — quando a taxa aumenta em uma unidade, a responsabilidade criminal diminui em 0,271. O modelo consegue explicar 37% da variabilidade da variável independente. Essa regressão teve 37 resíduos, ou seja, 37 observações.
+
+-   Testando os Pressupostos
+
+    -   Multicolinearidade: A análise da correlação de Pearson mostrou que as variáveis independentes não apresentam correlações altas. O VIF não indicou problemas de multicolinearidade, com valores bem abaixo de 10.
+
+    -   Intervalo de Confiança: O intervalo de confiança das variáveis IDH e do intercepto continuam sendo as maiores, indicando incerteza nas estimativas. O coeficiente de desemprego continuou sendo o mais preciso.
+
+    -   Linearidade: No pairs.panels, temos as mesmas conclusões sobre as variáveis Gini e IDH, mas a variável de responsabilidade criminal que usamos nessa regressão apresenta uma relação linear mais evidente. No entanto, o gráfico "Residuals vs Fitted" sugere violação do pressuposto de linearidade, pois a linha vermelha não segue a linha pontilhada.
+
+    -   Normalidade dos Resíduos: O teste de Shapiro-Wilk (p=0,0055) rejeitou a hipótese de normalidade. Porém, vemos no gráfico Q-Q que a distribuição dos resíduos se aproximou da distribuição normal, mas que há um ponto que está muito distante, provavelmente influenciando o teste. Logo, irei considerar que o pressuposto não foi violado, principalmente porque o ponto 114 já foi demonstrado como um outlier.
+
+    -   Homoscedasticidade: O gráfico Scale-location indicou a violação deste pressuposto, pois a linha vermelha não foi horizontal e os pontos não estavam distribuídos aleatoriamente. O teste de Breusch-Pagan também rejeitou a hipótese nula de que há homoscedasticidade (p=0,0002) — ou seja, o pressuposto foi violado.
+
+    -   Outliers: No gráfico "Residuals vs Leverage", um ponto está próximo do limite inferior de outliers, e outro ponto ultrapassou o limite superior. No summary dos resíduos padronizados (rstandard), vemos que o valor máximo ultrapassou o valor indicado de 3 (4,302), o que indica um outlier influente — o mesmo ponto que afetou a regressão anterior.
+
+    -   Independência dos Resíduos: A análise dos resíduos visualmente não indicou violação da independência dos resíduos. O gráfico mostrou distribuição aleatória, o que sugere que os resíduos são independentes entre si.
+
+    -   Esperança dos Resíduos = 0: O histograma e a média dos resíduos indicaram que a esperança é próxima de 0, o que não confirma o pressuposto, mas era o que se esperava acontecer.
+
+```{r reg_rcrim_hz}
+#TESTES PARA A REGRESSÃO DE RESPONSABILIDADE CRIMINAL DE HAZEL
+
+#Resumo da regressão
+summary(reg_rcrim_hz)
+
+#Medida de multicolinearidade
+vif(reg_rcrim_hz)
+
+#Intervalo de confiança dos coeficientes
+confint(reg_rcrim_hz, level = 0.95)
+
+#Gráfico que apresenta: linearidade, normalidade, homoscedasticidade, e outliers
+par(mfrow=(c(2,2)))
+plot(reg_rcrim_hz)
+
+#Teste de normalidade
+shapiro.test(residuals(reg_rcrim_hz))
+
+#Teste de homoscedasticidade
+bptest(reg_rcrim_hz)
+
+#Outliers
+summary(rstandard(reg_rcrim_hz))
+
+#Gráfico de independência
+residuos_rcrim_hz <- data.frame (
+  residuos = residuals(reg_rcrim_hz)) %>%
+  mutate(
+    id = row_number())
+
+residuos_rcrim_hz %>% 
+  ggplot(aes(x = id, y = residuos)) +
+  geom_point(
+    alpha = 0.3) +
+  geom_smooth(method = "lm", color = "red") +
+  theme_bw()
+
+#Teste de independencia
+durbinWatsonTest(reg_rcrim_hz)
+
+#Histograma e média dos resíduos, pressuposto da esperança = 0
+residuos_rcrim_hz %>%
+   summarise( 
+    media = round(mean(residuos), 10))
+  
+residuos_rcrim_hz %>%
+  ggplot(aes(x= residuos)) +
+  geom_density()
+```
+
+# Avaliação da regressão de responsabilidade criminal de Cipriani
+
+-   Análise dos Coeficientes: Os únicos coeficientes que demonstraram relevância estatística foram o intercepto, o IDH (alta relevância) e o desemprego (relevância maior do que nas regressões anteriores, mas ainda menor que o IDH). O IDH e o desemprego possuem uma relação negativa com a taxa de homicídios, diminuindo, respectivamente, 29,454 e 0,102 a cada uma unidade da variável dependente. A variável de interesse do artigo, rcrim_cp, tem relação negativa com a taxa de homicídios — quando a taxa aumenta em uma unidade, a responsabilidade criminal diminui em 0,048. O modelo consegue explicar 31% da variabilidade da variável independente. Essa regressão teve 37 resíduos, ou seja, 37 observações.
+
+-   Testando os Pressupostos
+
+    -   Multicolinearidade: A análise da correlação de Pearson mostrou que as variáveis independentes não apresentam correlações altas. O VIF não indicou problemas de multicolinearidade, com valores bem abaixo de 10.
+
+    -   Intervalo de Confiança: O intervalo de confiança das variáveis IDH e do intercepto continuam sendo as maiores, indicando incerteza nas estimativas. O coeficiente de desemprego continuou sendo o mais preciso.
+
+    -   Linearidade: No pairs.panels, temos as mesmas conclusões sobre as variáveis Gini e IDH, mas a variável de responsabilidade criminal do Cipriani é a que menos apresenta uma relação linear, já que a linha está completamente reta. O gráfico "Residuals vs Fitted" confirma a violação do pressuposto de linearidade, pois a linha vermelha não segue a linha pontilhada.
+
+    -   Normalidade dos Resíduos: O teste de Shapiro-Wilk (p=0,0002) rejeitou a hipótese de normalidade. Porém, vemos no gráfico Q-Q que a distribuição dos resíduos se aproximou da distribuição normal, mas que há um ponto que está muito distante, provavelmente influenciando o teste. Logo, irei considerar que o pressuposto não foi violado, principalmente porque o ponto 114 já foi demonstrado como um outlier.
+
+    -   Homoscedasticidade: O gráfico Scale-location indicou a violação deste pressuposto, pois a linha vermelha não foi horizontal e os pontos não estavam distribuídos aleatoriamente. O teste de Breusch-Pagan também rejeitou a hipótese nula de que há homoscedasticidade (p=0,006) — ou seja, o pressuposto foi violado.
+
+    -   Outliers: No gráfico "Residuals vs Leverage", um ponto que ultrapassou o limite superior. No summary dos resíduos padronizados (rstandard), vemos que o valor máximo ultrapassou o valor indicado de 3 (4,488), o que indica um outlier influente — o mesmo ponto que afetou a regressão anterior.
+
+    -   Independência dos Resíduos: A análise dos resíduos visualmente não indicou violação da independência dos resíduos. O gráfico mostrou distribuição aleatória, o que sugere que os resíduos são independentes entre si.
+
+    -   Esperança dos Resíduos = 0: O histograma e a média dos resíduos indicaram que a esperança é próxima de 0, o que não confirma o pressuposto, mas era o que se esperava acontecer.
+
+```{r reg_rcrim_cp}
+#TESTES PARA A REGRESSÃO DE RESPONSABILIDADE CRIMINAL DE CIPRIANI
+
+#Resumo da regressão
+summary(reg_rcrim_cp)
+
+#Medida de multicolinearidade
+vif(reg_rcrim_cp)
+
+#Intervalo de confiança dos coeficientes
+confint(reg_rcrim_cp, level = 0.95)
+
+#Gráfico que apresenta: linearidade, normalidade, homoscedasticidade, e outliers
+par(mfrow=(c(2,2)))
+plot(reg_rcrim_cp)
+
+#Teste de normalidade
+shapiro.test(residuals(reg_rcrim_cp))
+
+#Teste de homoscedasticidade
+bptest(reg_rcrim_cp)
+
+#Outliers
+summary(rstandard(reg_rcrim_cp))
+
+#Gráfico de independência
+residuos_rcrim_cp <- data.frame (
+  residuos = residuals(reg_rcrim_cp)) %>%
+  mutate(
+    id = row_number())
+
+residuos_rcrim_cp %>% 
+  ggplot(aes(x = id, y = residuos)) +
+  geom_point(
+    alpha = 0.3) +
+  geom_smooth(method = "lm", color = "red") +
+  theme_bw() 
+
+#Teste de independencia
+durbinWatsonTest(reg_rcrim_cp)
+
+#Histograma e média dos resíduos, pressuposto da esperança = 0
+residuos_rcrim_cp %>%
+   summarise( 
+    media = round(mean(residuos), 10))
+  
+residuos_rcrim_cp %>%
+  ggplot(aes(x= residuos)) +
+  geom_density()
+
+```
+
+```{r}
+#Teste com as variáveis de maior relevância, e retirando o outlier 114
+
+data_lins16teste <- data_lins16 [-114, ]
+
+testereg <- lm(taxa_homicidios ~ idh + desemprego + rcrim_hz, data = data_lins16teste)
+summary(testereg)
+
+par(mfrow=(c(2,2)))
+plot(testereg)
+```
+
+```{r}
+#Os NAs das variáveis de maioridade penal e responsabilidade criminal alteram as características das outras variáveis em suas regressões?
+
+data_mpenal_hz <- model.frame(reg_mpenal_hz)
+data_mpenal_gv <- model.frame(reg_mpenal_gv)
+data_rcrim_hz <- model.frame(reg_rcrim_hz)
+data_rcrim_cp <- model.frame(reg_rcrim_cp)
+
+print(colMeans(data_lins16, na.rm = TRUE))
+print(colMeans(data_mpenal_hz, na.rm = TRUE))
+print(colMeans(data_mpenal_gv, na.rm = TRUE))
+print(colMeans(data_rcrim_hz, na.rm = TRUE))
+print(colMeans(data_rcrim_cp, na.rm = TRUE))
+```
+
+# Conclusões
+
+A regressão que conseguiu explicar maior parte da variabilidade da variável dependente foi a de responsabilidade criminal da Hazel, mesmo assim com um valor muito baixo (37%). Selecionei as variáveis que apresentaram maior relevância estatística entre as regressões — IDH, desemprego e responsabilidade criminal da Hazel — e fiz uma regressão que consegui explicar 53% da variabilidade da variável dependente. Apesar disso, todas as regressões falharam na maioria das checagens, violando pressupostos essenciais para a validação do uso do modelo linear (nenhuma regressão passou no pressuposto da linearidade e da homoscedasticidade, por exemplo). Isso não significa que não haja uma relação entre as variáveis independentes com a dependente, já que vimos indícios dessas relações no pairs.panels, mas sim que o modelo de regressão linear não é adequado para esses dados.
+
+Todas as regressões tinham uma base de dados menor do que o mínimo para criar um bom modelo, o que pode explicar os altos intervalos de confiança, e o p-valor tão baixo — os valores obtidos não trazem nenhuma confiança de que não estão enviesados, pois não tem o tamanho mínimo para essa garantia. A grande quantidade de NAs pode também influenciar na presença de outliers, já que tem poucos dados para balancear esse efeito. Vimos que a linha 114 alterou fortemente as estatísticas (que é a observação referente ao México), mas ao fazer um teste retirando ela, vemos que outros pontos aparecem influenciando fortemente as estatísticas. Comparando as médias das variáveis na base de dados original e em cada regressão, podemos ver algumas diferenças que podem decorrer da quantidade de NAs. A taxa de homicídio na base de dados foi de 9,160, e nas regressões o valor da taxa de homicídios mais próximo foi 2,118. Além disso, todas as variáveis tiveram uma média de IDH bem alta, o que também demonstra um viés dentro das regressões.
+
+Concluo que esse artigo não tem capacidade de comprovar e nem negar a sua hipótese de que a redução na maioridade penal diminui os níveis de violência, por conta da falta de dados e da má adequação dos modelos de regressão, já que os pressupostos necessários para o uso da regressão linear não foram atendidos.
